@@ -24,7 +24,7 @@ pr:
     include:
       - main
 
-pool: 'local-minikube-pool'
+pool: 'local-minikube-pool'  # self-hosted agent on the developer machine that also runs Minikube
 
 variables:
   - group: sample-app-vars
@@ -136,22 +136,12 @@ stages:
                     Write-Host "Substituted image tag $(tag) into k8s/deployment.yaml"
                   displayName: 'Substitute image tag in manifests'
 
-                - task: KubernetesManifest@1
-                  displayName: 'Apply k8s manifests'
-                  inputs:
-                    action: 'deploy'
-                    kubernetesServiceConnection: '$(kubernetesServiceConnection)'
-                    namespace: '$(k8sNamespace)'
-                    manifests: |
-                      k8s/deployment.yaml
-                      k8s/service.yaml
-                      k8s/hpa.yaml
+                - script: |
+                    kubectl apply -f k8s/deployment.yaml -n $(k8sNamespace)
+                    kubectl apply -f k8s/service.yaml -n $(k8sNamespace)
+                    kubectl apply -f k8s/hpa.yaml -n $(k8sNamespace)
+                  displayName: 'kubectl apply manifests (local kubeconfig on self-hosted agent)'
 
-                - task: Kubernetes@1
+                - script: |
+                    kubectl rollout status deployment/sample-app -n $(k8sNamespace) --timeout=120s
                   displayName: 'Verify rollout status'
-                  inputs:
-                    connectionType: 'Kubernetes Service Connection'
-                    kubernetesServiceEndpoint: '$(kubernetesServiceConnection)'
-                    namespace: '$(k8sNamespace)'
-                    command: 'rollout'
-                    arguments: 'status deployment/sample-app --timeout=120s'
