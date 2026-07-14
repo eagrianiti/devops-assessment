@@ -24,8 +24,7 @@ pr:
     include:
       - main
 
-pool:
-  vmImage: 'ubuntu-latest'
+pool: 'local-minikube-pool'
 
 variables:
   - group: sample-app-vars
