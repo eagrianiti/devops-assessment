@@ -20,11 +20,12 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// Swagger enabled in all environments (useful for demoing this assessment project)
+app.UseSwagger();
+app.UseSwaggerUI();
+
+app.UseDefaultFiles();  // serves wwwroot/index.html at "/"
+app.UseStaticFiles();
 
 app.UseHttpsRedirection();
 app.MapControllers();
