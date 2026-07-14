@@ -1,0 +1,162 @@
+# azure-pipelines.yml
+# CI/CD pipeline: build .NET app -> build & push Docker image -> deploy to Kubernetes
+#
+# Required pipeline variables / library group "sample-app-vars":
+#   containerRegistry        - Service connection name to your ACR (Azure Container Registry)
+#   imageRepository           - e.g. "sample-app"
+#   dockerfilePath            - "$(Build.SourcesDirectory)/Dockerfile"
+#   kubernetesServiceConnection - Service connection name to your k8s cluster (AKS or Minikube via generic k8s SC)
+#   k8sNamespace              - e.g. "sample-app"
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - src/SampleApp/*
+      - Dockerfile
+      - k8s/*
+      - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: sample-app-vars
+  - name: tag
+    value: '$(Build.BuildId)'
+  - name: buildConfiguration
+    value: 'Release'
+
+stages:
+
+  # ---------------------------------------------------------------------
+  # Stage 1: Build & test the .NET application (Task 1)
+  # ---------------------------------------------------------------------
+  - stage: Build
+    displayName: 'Build and Test .NET App'
+    jobs:
+      - job: BuildJob
+        displayName: 'dotnet build & test'
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Install .NET 8 SDK'
+            inputs:
+              packageType: 'sdk'
+              version: '8.0.x'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'dotnet restore'
+            inputs:
+              command: 'restore'
+              projects: 'src/SampleApp/SampleApp.csproj'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'dotnet build'
+            inputs:
+              command: 'build'
+              projects: 'src/SampleApp/SampleApp.csproj'
+              arguments: '--configuration $(buildConfiguration) --no-restore'
+
+          # Bonus task: automated tests. Assumes a test project at tests/SampleApp.Tests
+          # pointing to the *Tests.csproj. If no tests yet, this step can be commented out.
+          - task: DotNetCoreCLI@2
+            displayName: 'dotnet test'
+            condition: succeeded()
+            continueOnError: true
+            inputs:
+              command: 'test'
+              projects: '**/*Tests.csproj'
+              arguments: '--configuration $(buildConfiguration) --no-build --logger trx --collect "Code coverage"'
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'VSTest'
+              testResultsFiles: '**/*.trx'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'dotnet publish (artifact for containerization)'
+            inputs:
+              command: 'publish'
+              publishWebProjects: false
+              projects: 'src/SampleApp/SampleApp.csproj'
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/publish'
+              zipAfterPublish: false
+
+          - publish: '$(Build.ArtifactStagingDirectory)/publish'
+            artifact: 'drop'
+            displayName: 'Publish build artifact'
+
+  # ---------------------------------------------------------------------
+  # Stage 2: Build & push Docker image (Task 2)
+  # ---------------------------------------------------------------------
+  - stage: DockerBuildPush
+    displayName: 'Build and Push Docker Image'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: DockerJob
+        displayName: 'docker build & push'
+        steps:
+          - task: Docker@2
+            displayName: 'Build and push image to ACR'
+            inputs:
+              containerRegistry: '$(containerRegistry)'
+              repository: '$(imageRepository)'
+              command: 'buildAndPush'
+              Dockerfile: '$(dockerfilePath)'
+              buildContext: '$(Build.SourcesDirectory)'
+              tags: |
+                $(tag)
+                latest
+
+  # ---------------------------------------------------------------------
+  # Stage 3: Deploy to Kubernetes (Task 3)
+  # ---------------------------------------------------------------------
+  - stage: DeployToKubernetes
+    displayName: 'Deploy to Kubernetes'
+    dependsOn: DockerBuildPush
+    condition: succeeded()
+    jobs:
+      - deployment: DeployJob
+        displayName: 'kubectl apply & rollout'
+        environment: 'sample-app-k8s'  # Azure DevOps Environment; add approval gates here for staging-first safety
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: replacetokens@5
+                  displayName: 'Substitute image tag in manifests'
+                  inputs:
+                    targetFiles: 'k8s/deployment.yaml'
+                    tokenPrefix: '#{'
+                    tokenSuffix: '}#'
+                  env:
+                    IMAGE_TAG: '$(tag)'
+
+                - task: KubernetesManifest@1
+                  displayName: 'Apply k8s manifests'
+                  inputs:
+                    action: 'deploy'
+                    kubernetesServiceConnection: '$(kubernetesServiceConnection)'
+                    namespace: '$(k8sNamespace)'
+                    manifests: |
+                      k8s/deployment.yaml
+                      k8s/service.yaml
+                      k8s/hpa.yaml
+
+                - task: Kubernetes@1
+                  displayName: 'Verify rollout status'
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: '$(kubernetesServiceConnection)'
+                    namespace: '$(k8sNamespace)'
+                    command: 'rollout'
+                    arguments: 'status deployment/sample-app --timeout=120s'
