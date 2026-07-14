@@ -131,14 +131,10 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: replacetokens@5
+                - powershell: |
+                    (Get-Content k8s/deployment.yaml) -replace '#\{IMAGE_TAG\}#', '$(tag)' | Set-Content k8s/deployment.yaml
+                    Write-Host "Substituted image tag $(tag) into k8s/deployment.yaml"
                   displayName: 'Substitute image tag in manifests'
-                  inputs:
-                    targetFiles: 'k8s/deployment.yaml'
-                    tokenPrefix: '#{'
-                    tokenSuffix: '}#'
-                  env:
-                    IMAGE_TAG: '$(tag)'
 
                 - task: KubernetesManifest@1
                   displayName: 'Apply k8s manifests'
