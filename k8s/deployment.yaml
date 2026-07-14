@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: sample-app
-          image: <acrname>.azurecr.io/sample-app:#{IMAGE_TAG}#
+          image: eagrianitii/sample-app:#{IMAGE_TAG}#
           ports:
             - containerPort: 8080
           resources:
