@@ -55,16 +55,44 @@ deploys a .NET 8 Web API to a Kubernetes cluster via Azure DevOps.
      crash-looping pod.
 - Local verification: `kubectl get pods -n sample-app -w`, `kubectl port-forward svc/sample-app 8080:80 -n sample-app`.
 
-## Task 4 — Monitoring: metrics & logging
+## Task 4 — Monitoring: metrics & logging (implemented, not just described)
 
-**Stack:** Prometheus + Grafana for metrics, Loki (or ELK) for logs — the same combination
-already in use for the WEB01/WEB02 stack, extended to Kubernetes via the `kube-prometheus-stack`
-Helm chart, which auto-discovers pods/services via `ServiceMonitor` CRDs.
+**Actually installed** on the local Minikube cluster via Helm — not just proposed on paper:
 
-**What would be added to the app:**
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+kubectl create namespace monitoring
+helm install monitoring prometheus-community/kube-prometheus-stack --namespace monitoring
+```
+
+This deploys, in the `monitoring` namespace:
+- **Prometheus** — scrapes metrics from every namespace, including `sample-app`
+- **Grafana** — pre-loaded with the standard `kube-prometheus-stack` dashboards (no manual
+  dashboard-building required)
+- **Alertmanager** — routes alerts (not wired to a real notification channel here, but the
+  pipeline — Prometheus rule → Alertmanager → Slack/email/PagerDuty — is in place)
+- **kube-state-metrics** and **node-exporter** — expose Kubernetes object state and node-level
+  metrics respectively
+
+**Verified working**: the `Kubernetes / Compute Resources / Namespace (Pods)` Grafana dashboard,
+filtered to the `sample-app` namespace, shows live CPU request/limit values pulled directly from
+the running pods (`0.100` request / `0.500` limit per pod — matching `k8s/deployment.yaml`
+exactly), confirming Prometheus is actually scraping this workload, not just installed and idle.
+
+**Accessing it locally:**
+```bash
+kubectl --namespace monitoring port-forward svc/monitoring-grafana 3000:80
+# then browse to http://localhost:3000 (user: admin, password below)
+kubectl get secret --namespace monitoring -l app.kubernetes.io/component=admin-secret \
+  -o jsonpath="{.items[0].data.admin-password}" | base64 --decode
+```
+
+**What would be added for the app itself** (beyond the infra-level metrics above):
 - `prometheus-net.AspNetCore` NuGet package exposing a `/metrics` endpoint with standard
   ASP.NET Core request metrics (duration, status code, in-flight requests).
-- A `ServiceMonitor` resource pointing Prometheus at that `/metrics` endpoint.
+- A `ServiceMonitor` resource pointing Prometheus at that `/metrics` endpoint, so
+  application-level metrics join the same Grafana dashboards as the infra-level ones above.
 
 **KPIs tracked (the "four golden signals"):**
 
@@ -79,7 +107,9 @@ Helm chart, which auto-discovers pods/services via `ServiceMonitor` CRDs.
 
 **Logging:** structured JSON logs (`Serilog` + console sink) shipped via **Promtail** to
 **Loki**, correlated with metrics in the same Grafana dashboards. Log-based alerts (e.g.
-spike in `ERROR`-level log lines) complement the metric-based ones above.
+spike in `ERROR`-level log lines) complement the metric-based ones above. (Not installed
+alongside Prometheus/Grafana here, to keep the local demo footprint reasonable — described
+rather than implemented, per the assessment's "describe or implement" wording.)
 
 ## Bonus tasks
 
@@ -108,26 +138,26 @@ immediate; scale-down waits 5 minutes of sustained low usage to avoid flapping.
 
 ```
                         ┌─────────────────────────┐
-                        │   Azure Front Door /     │
-                        │   Cloudflare (Global LB) │
-                        │  health-probes each      │
-                        │  region, routes by       │
-                        │  latency + health        │
+                        │  Azure Front Door /     │
+                        │  Cloudflare (Global LB) │
+                        │  health-probes each     │
+                        │  region, routes by      │
+                        │  latency + health       │
                         └───────────┬─────────────┘
                      ┌──────────────┴──────────────┐
                      ▼                             ▼
-        ┌─────────────────────┐        ┌─────────────────────┐
+        ┌─────────────────────┐        ┌──────────────────────┐
         │  Region A (primary) │        │  Region B (standby/  │
-        │  AKS - 3 zones      │        │  active) AKS-3 zones  │
+        │  AKS - 3 zones      │        │  active) AKS-3 zones │
         │  sample-app pods    │        │  sample-app pods     │
-        └──────────┬──────────┘        └──────────┬──────────┘
+        └──────────┬──────────┘        └───────────┬──────────┘
                    │                               │
                    ▼                               ▼
         ┌─────────────────────┐        ┌─────────────────────┐
-        │  Primary DB          │◄──────►│ Read replica /       │
-        │  (writes)            │  async  │ geo-replicated       │
-        │                      │  repl.  │ (promoted on         │
-        │                      │         │  failover)           │
+        │  Primary DB         │◄──────►│ Read replica /      │
+        │  (writes)           │  async │ geo-replicated      │
+        │                     │  repl. │ (promoted on        │
+        │                     │        │  failover)          │
         └─────────────────────┘        └─────────────────────┘
 ```
 
