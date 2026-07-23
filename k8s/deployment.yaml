@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: sample-app
-          image: eagrianitii/sample-app:local   # default for local `kubectl apply -f k8s/`; pipeline substitutes this on its own copy of the manifests
+          image: eagrianitii/sample-app:local
           ports:
             - containerPort: 8080
           resources:
@@ -35,9 +35,7 @@ spec:
               memory: "256Mi"
 
           # --- Startup probe ---
-          # Covers slow boot (JIT warm-up, cache priming). While this fails, liveness/readiness
-          # are NOT evaluated, so the container isn't killed mid-startup. Once it succeeds once,
-          # it's never checked again.
+          # Covers slow boot (JIT warm-up, cache priming). While this fails, liveness/readiness are NOT evaluated
           startupProbe:
             httpGet:
               path: /health/startup
@@ -46,9 +44,7 @@ spec:
             periodSeconds: 2
 
           # --- Liveness probe ---
-          # Cheap, process-only check. If this fails repeatedly, Kubernetes kills and restarts
-          # the pod — use only for "is the process stuck/deadlocked", not for dependency health,
-          # or you'll get restart-loops caused by a downstream outage instead of fixing it.
+          # Process-only check. If this fails repeatedly, Kubernetes kills and restarts
           livenessProbe:
             httpGet:
               path: /health/live
@@ -60,9 +56,6 @@ spec:
 
           # --- Readiness probe ---
           # Checks downstream dependencies (DB, cache, etc). If it fails, the pod is pulled out
-          # of the Service's endpoint list (no traffic sent) but NOT restarted — it can recover
-          # on its own once the dependency is back, which is exactly what you want during a
-          # rolling update or a transient dependency blip.
           readinessProbe:
             httpGet:
               path: /health/ready
